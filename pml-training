@@ -1,0 +1,131 @@
+---
+title: "Course Project"
+output: html_document
+---
+
+
+## Executive Summary
+
+We analyzed the data in the Weight Lifting Exercises Dataset to produce a prediction on the testing set containing 20 subjects. Our approach was to evaluate the performance of three classification algorithms (random forest, linear discriminant analysis and naive bayes) and an ensemble of the resulting models. After our analysis, we concluded that the random forest model produced the most accurate result, with the ensemble model producing no significant edge in accuracy. Therefore, we applied the random forest model to classify the testing set.
+
+## Cleaning up the data
+
+The original sets can be download from the links below. In case of running the code, the files must be placed in the working directory.
+
+-https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+-https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+First we proceeded to load and clean the data. A simple observation of the first rows show that many columns contain missing values and errors. Therefore we discarded such columns as well as the first 7 columns that contained no relevant data for the analysis (subject name, timestamps,etc.):
+
+```{r}
+training <- read.csv("pml-training.csv")
+training <- training[,colSums(is.na(training))==0]
+training <- training[,colSums(training == "#DIV/0!")==0]
+training <- training[,colSums(training == "")==0]
+training <- training[,-c(1:7)]
+```
+
+In the testing set, we kept the columns that remained in the training set -except for the classe column which is not available in the testing set-.
+
+```{r}
+testing <- read.csv("pml-testing.csv")
+testing <- testing[,colnames(training)[1:(ncol(training)-1)]]
+```
+
+## Building the model
+
+Our approach to generate the final prediction will be to evaluate and possibly ensemble three classification algorithms: random forest, linear discriminant analysis and naive bayes. We will split the training set into three subsets (train -50%-, test -30%- and validation-20%-) to allow for cross validation.We will train the algorithms in the training set and get an individual out of sample measure using the test subset. Also, using the test subset we will calibrate the ensemble, which will be generated using a random forest that will feed from the three individual algorithms. Finally, we will get an OOS estimation by testing the ensembled model on the validation set.
+
+```{r}
+library(caret)
+train.rows <- createDataPartition(training$classe,p=0.5,list=FALSE)
+training.train <- training[train.rows,]
+training.testvalidate <- training[-train.rows,]
+test.rows <- createDataPartition(training.testvalidate$classe,p=0.6,list=FALSE)
+training.test <- training.testvalidate[test.rows,]
+training.validate <- training.testvalidate[-test.rows,]
+dim(training.train)
+```
+
+Considering that after the cleanup we still have 52 variables, we evaluated whether the variables are correlated. As can be seen in the following level plot, some of the variables that are significantly correlated. This indicates that we might benefit from preprocessing via principal component analysis.
+
+```{r}
+corrMatrix <- cor(training.train[,1:52])
+corrDF <- expand.grid(row = 1:52, col = 1:52)
+corrDF$correlation <- as.vector(corrMatrix)
+levelplot(correlation ~ row+ col, corrDF)
+```
+
+We first applied the random forest algorithm, and checked its accuracy in the test set. As can be seen as follows, the RF model had an OOS accuracy of 96.16%.
+
+```{r}
+set.seed(12345)
+ctrl <- trainControl(preProcOptions = list(thresh = 0.95))
+model.rf <- train(classe~.,training.train,method = "rf",ntree=100,preProcess = "pca",trControl = ctrl)
+prediction.rf.is <- predict(model.rf,training.train)
+prediction.rf.oos <- predict(model.rf,training.test)
+accuracy.rf.oos <- sum(prediction.rf.oos==training.test$classe)/length(training.test$classe)
+accuracy.rf.is <- sum(prediction.rf.is==training.train$classe)/length(training.train$classe)
+model.rf$finalModel
+print(c("OOS Accuracy:",accuracy.rf.oos))
+```
+
+Next, we applied the LDA and test for its accuracy.
+
+```{r}
+set.seed(2345)
+ctrl <- trainControl(preProcOptions = list(thresh = 0.95))
+model.lda <- train(classe~.,training.train,method = "lda",preProcess = "pca",trControl = ctrl)
+prediction.lda.is <- predict(model.lda,training.train)
+prediction.lda.oos <- predict(model.lda,training.test)
+accuracy.lda.oos <- sum(prediction.lda.oos==training.test$classe)/length(training.test$classe)
+accuracy.lda.is <- sum(prediction.lda.is==training.train$classe)/length(training.train$classe)
+print(c("OOS Accuracy:",accuracy.lda.oos))
+```
+
+Finally we applied the naive bayes algorithm and tested its accuracy.
+
+```{r}
+set.seed(2345)
+ctrl <- trainControl(preProcOptions = list(thresh = 0.95))
+model.nb <- train(classe~.,training.train,method = "nb",preProcess = "pca",trControl = ctrl)
+prediction.nb.oos <- predict(model.nb,training.test)
+prediction.nb.is <- predict(model.nb,training.train)
+accuracy.nb.oos <- sum(prediction.nb.oos==training.test$classe)/length(training.test$classe)
+accuracy.nb.iss <- sum(prediction.nb.is==training.train$classe)/length(training.train$classe)
+print(c("OOS Accuracy:",accuracy.nb.oos))
+```
+
+In short, we obtained three models with the following OOS accuracy:
+-Random ForestL: OOS Accuracy 96.161%
+-LDA: OOS Accuracy 52.131%
+-Naive Bayes: OOS Accuracy 63.088%
+
+Next we proceeded to generate an ensembled model on the test set. 
+
+```{r}
+pred.DF <- data.frame(prediction.rf.oos,prediction.nb.oos,prediction.lda.oos,classe=training.test$classe)
+comb.model <- train(classe~., pred.DF,method="rf",ntree=100)
+final.prediction <- predict(comb.model,pred.DF)
+final.prediction.accuracy <- sum(final.prediction==pred.DF$classe)/length(pred.DF$classe)
+table(final.prediction,pred.DF$classe)
+print(c("OOS Accuracy",final.prediction.accuracy))
+```
+
+As can be seen, the ensembled model accuracy is equal to random forest model's accuracy. Therefore, since no significant advantage can be derived from the emsembled model, we applied the random forest model.
+
+```{r}
+predict.rf.validation <- predict(model.rf,training.validate)
+validation.rf.accuracy <- sum(predict.rf.validation==training.validate$classe)/length(training.validate$classe)
+```
+
+As can be seen, the OOS Accuracy is still consistent in the validation set.
+
+## Applying the model on the TESTING SET
+
+Finally, we applied the RF previously developed on the testing set to produce a prediction for each of the 20 cases proposed by the final Quiz.
+ 
+```{r}
+predict.rf.testing <- predict(model.rf,testing)
+predict.rf.testing
+```
